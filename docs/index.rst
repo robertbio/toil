@@ -12,7 +12,7 @@ To begin, consider this short toil script:
 .. code:: python
 
    from toil.job import Job
-   from optparse import ArgumentParser
+   from argparse import ArgumentParser
    import sys
 
    class HelloWorld(Job):
