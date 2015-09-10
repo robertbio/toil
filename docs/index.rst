@@ -42,7 +42,7 @@ To begin, consider this short toil script:
    def main():
        parser = OptionParser()
        Job.Runner.addToilOptions(parser)
-       options, args = parser.parse_args(sys.argv)
+       options, args = parser.parse_args(sys.argv[1:])
        Job.Runner.startToil(HelloWorld(),  options)
 
    if __name__=="__main__":
