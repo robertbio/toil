@@ -13,6 +13,7 @@ To begin, consider this short toil script:
 
    from toil.job import Job
    from optparse import OptionParser
+   import sys
 
    class HelloWorld(Job):
       def __init__(self):
@@ -41,7 +42,7 @@ To begin, consider this short toil script:
    def main():
        parser = OptionParser()
        Job.Runner.addToilOptions(parser)
-       options, args = parser.parse_args(args)
+       options, args = parser.parse_args(sys.argv)
        Job.Runner.startToil(HelloWorld(),  options)
 
    if __name__=="__main__":
