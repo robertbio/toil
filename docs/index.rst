@@ -12,7 +12,7 @@ To begin, consider this short toil script:
 .. code:: python
 
    from toil.job import Job
-   from optparse import OptionParser
+   from optparse import ArgumentParser
    import sys
 
    class HelloWorld(Job):
@@ -40,9 +40,9 @@ To begin, consider this short toil script:
                localFile.write(globalFile.read())
 
    def main():
-       parser = OptionParser()
+       parser = ArgumentParser()
        Job.Runner.addToilOptions(parser)
-       options, args = parser.parse_args(sys.argv[1:])
+       options = parser.parse_args(sys.argv[1:])
        Job.Runner.startToil(HelloWorld(),  options)
 
    if __name__=="__main__":
