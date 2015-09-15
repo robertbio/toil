@@ -41,6 +41,10 @@ numJobs = 2
 #
 numCoresPerJob = (numCores) / numJobs
 
+memoryForJobs = 10
+
+diskForJobs = 1000
+
 
 class hidden:
     """
@@ -77,14 +81,42 @@ class hidden:
 
         def testAvailableCores(self):
             self.assertTrue(multiprocessing.cpu_count() >= numCores)
+            
+        def testRunJobs(self):
+            outputPaths = [os.path.join(self.tempDir, "test{}.txt".format(i)) for i in range(numJobs)]
+            jobCommands = [self.makeJobCommand("sleep 5; touch {}".format(path)) for path in outputPaths]
+            assignedIDs = [self.batchSystem.issueBatchJob(jobCommand, memory=memoryForJobs, cores=numCores, disk=diskForJobs) for jobCommand in jobCommands]
 
-        def testIssueJob(self):
-            test_path = os.path.join(self.tempDir, 'test.txt')
-            # sleep 1 coupled to command as 'touch' was too fast for wait_for_jobs to catch
-            jobCommand = 'touch {}; sleep 1'.format(test_path)
-            self.batchSystem.issueBatchJob(jobCommand, memory=10, cores=1, disk=1000)
-            self.wait_for_jobs(wait_for_completion=True)
-            self.assertTrue(os.path.exists(test_path))
+            issuedIDs = self.wait_for_jobs_to_issue(numJobs)
+            self.assertEqual(set(issuedIDs), set(assignedIDs))
+
+            runningJobIDs = self.wait_for_jobs_to_start(numJobs)
+            self.assertEqual(set(runningJobIDs), set(assignedIDs))
+
+            #kill one of the jobs and restart it
+            self.batchSystem.killBatchJobs([assignedIDs[0]])
+            newJob0 = self.batchSystem.issueBatchJob(jobCommands[0], memory=memoryForJobs, cores=numCores, disk=diskForJobs)
+            oldJob0 = assignedIDs[0] #save the old job ID so its status can be checked later
+            assignedIDs[0] = newJob0
+            
+            newIssuedIDs = self.wait_for_jobs_to_issue(numJobs)
+            self.assertTrue(set(newIssuedIDs), set(assignedIDs))
+            
+            newRunningJobIDs = self.wait_for_jobs_to_start(numJobs)
+            self.assertTrue(set(newRunningJobIDs), set(assignedIDs))
+            
+            self.wait_for_jobs_to_finish(numJobs)
+
+            updatedJobIDs = []
+            delay = 20
+            for i in range(numJobs+1): #the job that was killed will still return a status
+                updatedID, exitStatus = self.batchSystem.getUpdatedBatchJob(delay)
+                updatedJobIDs.append(updatedID)
+                self.assertEqual(exitStatus, 0)
+            self.assertEqual(set(updatedJobIDs), set(assignedIDs + [oldJob0]))
+                
+            for path in outputPaths:
+                self.assertTrue(os.path.exists(path))
 
         def testCheckResourceRequest(self):
             self.assertRaises(InsufficientSystemResources, self.batchSystem.checkResourceRequest,
@@ -101,67 +133,30 @@ class hidden:
                               cores=None, disk=1000)
             self.batchSystem.checkResourceRequest(memory=10, cores=1, disk=100)
 
-        def testGetIssuedJobIDs(self):
-            issuedIDs = []
-            issuedIDs.append(
-                self.batchSystem.issueBatchJob('sleep 1', memory=10, cores=numCoresPerJob,
-                                               disk=1000))
-            issuedIDs.append(
-                self.batchSystem.issueBatchJob('sleep 1', memory=10, cores=numCoresPerJob,
-                                               disk=1000))
-            self.assertEqual(set(issuedIDs), set(self.batchSystem.getIssuedBatchJobIDs()))
-
-        def testGetRunningJobIDs(self):
-            issuedIDs = []
-            issuedIDs.append(
-                self.batchSystem.issueBatchJob('sleep 100', memory=100e6, cores=1, disk=1000))
-            issuedIDs.append(
-                self.batchSystem.issueBatchJob('sleep 100', memory=100e6, cores=1, disk=1000))
-            self.wait_for_jobs(numJobs=2)
-            # Assert that the issued jobs are running
-            self.assertEqual(set(issuedIDs), set(self.batchSystem.getRunningBatchJobIDs().keys()))
-            log.info("running jobs: %s" % self.batchSystem.getRunningBatchJobIDs().keys())
-            # Assert that the length of the job was recorded
-            self.assertTrue(
-                len([t for t in self.batchSystem.getRunningBatchJobIDs().values() if t > 0]) == 2)
-            self.batchSystem.killBatchJobs(issuedIDs)
-
-        def testKillJobs(self):
-            jobCommand = 'sleep 100'
-            jobID = self.batchSystem.issueBatchJob(jobCommand, memory=100e6, cores=1, disk=1000)
-            self.wait_for_jobs()
-            # self.assertEqual([0], self.batchSystem.getRunningJobIDs().keys())
-            self.batchSystem.killBatchJobs([jobID])
-            self.assertEqual({}, self.batchSystem.getRunningBatchJobIDs())
-            # Make sure that killJob doesn't hang / raise KeyError on unknown job IDs
-            self.batchSystem.killBatchJobs([0])
-
-        def testGetUpdatedJob(self):
-            delay = 20
-            jobCommand = 'sleep %i' % delay
-            issuedIDs = []
-            for i in range(numJobs):
-                issuedIDs.append(
-                    self.batchSystem.issueBatchJob(jobCommand, memory=100e6, cores=numCoresPerJob,
-                                                   disk=1000))
-            jobs = set((issuedIDs[i], 0) for i in range(numJobs))
-            self.wait_for_jobs(numJobs=numJobs, wait_for_completion=True)
-            for i in range(numJobs):
-                jobs.remove(self.batchSystem.getUpdatedBatchJob(delay * 2))
-            self.assertFalse(jobs)
-
         def testGetRescueJobFrequency(self):
             self.assertTrue(self.batchSystem.getRescueBatchJobFrequency() > 0)
-
-        def wait_for_jobs(self, numJobs=1, wait_for_completion=False):
-            while not self.batchSystem.getIssuedBatchJobIDs():
-                pass
-            while not len(self.batchSystem.getRunningBatchJobIDs().keys()) == numJobs:
+            
+        def wait_for_jobs_to_issue(self, numJobs):
+            issuedIDs = None
+            while issuedIDs is None:
+                issuedIDs = self.batchSystem.getIssuedBatchJobIDs()
+            return issuedIDs
+        
+        def wait_for_jobs_to_start(self, numJobs):
+            runningIDs = None
+            while not runningIDs:
+                runningIDs = self.batchSystem.getRunningBatchJobIDs().keys()
                 time.sleep(0.1)
-            if wait_for_completion:
-                while self.batchSystem.getRunningBatchJobIDs():
-                    time.sleep(0.1)
-                    # pass updates too quickly (~24e6 iter/sec), which is why I'm using time.sleep(0.1):
+            return runningIDs
+        
+        def wait_for_jobs_to_finish(self, numJobs):
+            while self.batchSystem.getRunningBatchJobIDs():
+                time.sleep(0.1)
+                
+        def makeJobCommand(self, command):
+            """Wrap multiple commands into one, to accommodate parasol.
+            """
+            return "/bin/sh -c '%s'" % command
 
 
 @needs_mesos
@@ -206,20 +201,6 @@ class ParasolBatchSystemTest(hidden.AbstractBatchSystemTest, ParasolTestSupport)
     def tearDown(self):
         self._stopParasol()
         super(ParasolBatchSystemTest, self).tearDown()
-
-
-    def testIssueJob(self):
-        # TODO
-        # parasol treats 'touch test.txt; sleep 1' as one
-        # command with the arguments 'test.txt;', 'sleep', and '1'
-        # For now, override the test
-        test_path = os.path.join(self.tempDir, 'test.txt')
-        jobCommand = 'touch {}'.format(test_path)
-        self.batchSystem.issueBatchJob(jobCommand, memory=100e6, cores=1, disk=1000)
-        self.wait_for_jobs(wait_for_completion=True)
-        self.assertTrue(os.path.exists(test_path))
-
-
 
 @needs_gridengine
 class GridEngineTest(hidden.AbstractBatchSystemTest):
