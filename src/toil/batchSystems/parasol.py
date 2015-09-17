@@ -30,6 +30,7 @@ from multiprocessing import JoinableQueue as Queue
 #from Queue import Queue, Empty
 
 from toil.batchSystems.abstractBatchSystem import AbstractBatchSystem
+from toil.lib.bioio import getTempFile
 
 logger = logging.getLogger( __name__ )
 
@@ -90,6 +91,35 @@ def getUpdatedJob(parasolResultsFile, outputQueue1, outputQueue2):
         else:
             time.sleep(0.01) #Go to sleep to avoid churning
 
+
+class ParasolBatch():
+    def __init__(self, batchSystem, cores, memory):
+        self.batchSystem = batchSystem
+        self.resultsFile = getTempFile(rootDir=self.batchSystem.tempDir)
+        self.cores = cores
+        self.memory = memory
+        self.outputQueue1 = Queue()
+        self.outputQueue2 = Queue()
+
+        #Reset the job queue and results
+        exitValue = popenParasolCommand("%s -results=%s clear sick" % (self.batchSystem.parasolCommand, self.resultsFile), False)[0]
+        if exitValue is not None:
+            logger.warn("Could not clear sick status of the parasol batch %s" % self.resultsFile)
+        exitValue = popenParasolCommand("%s -results=%s flushResults" % (self.batchSystem.parasolCommand, self.resultsFile), False)[0]
+        if exitValue is not None:
+            logger.warn("Could not flush the parasol batch %s" % self.resultsFile)
+        open(self.resultsFile, 'w').close()
+
+        self.worker = Process(target=getUpdatedJob, args=(self.resultsFile, self.outputQueue1, self.outputQueue2))
+        self.worker.daemon = True
+        self.worker.start()
+
+    def getUpdatedBatchJob(self, maxWait):
+        jobID = self.batchSystem.getFromQueueSafely(self.outputQueue2, maxWait)
+        if jobID != None:
+            self.outputQueue2.task_done()
+        return jobID
+
 class ParasolBatchSystem(AbstractBatchSystem):
     """The interface for Parasol.
     """
@@ -100,31 +130,16 @@ class ParasolBatchSystem(AbstractBatchSystem):
                         "this batchsystem interface does not support such limiting" % maxMemory)
         #Keep the name of the results file for the pstat2 command..
         self.parasolCommand = config.parasolCommand
-        self.parasolResultsFile = getParasolResultsFileName(config.jobStore)
+        self.tempDir = config.jobStore
         #Reset the job queue and results (initially, we do this again once we've killed the jobs)
         self.queuePattern = re.compile("q\s+([0-9]+)")
         self.runningPattern = re.compile("r\s+([0-9]+)\s+[\S]+\s+[\S]+\s+([0-9]+)\s+[\S]+")
-        self.killBatchJobs(self.getIssuedBatchJobIDs()) #Kill any jobs on the current stack
+
         logger.info("Going to sleep for a few seconds to kill any existing jobs")
         time.sleep(5) #Give batch system a second to sort itself out.
         logger.info("Removed any old jobs from the queue")
-        #Reset the job queue and results
-        exitValue = popenParasolCommand("%s -results=%s clear sick" % (self.parasolCommand, self.parasolResultsFile), False)[0]
-        if exitValue is not None:
-            logger.warn("Could not clear sick status of the parasol batch %s" % self.parasolResultsFile)
-        exitValue = popenParasolCommand("%s -results=%s flushResults" % (self.parasolCommand, self.parasolResultsFile), False)[0]
-        if exitValue is not None:
-            logger.warn("Could not flush the parasol batch %s" % self.parasolResultsFile)
-        open(self.parasolResultsFile, 'w').close()
-        logger.info("Reset the results queue")
-        #Stuff to allow max cpus to be work
-        self.outputQueue1 = Queue()
-        self.outputQueue2 = Queue()
-        #worker = Thread(target=getUpdatedJob, args=(self.parasolResultsFileHandle, self.outputQueue1, self.outputQueue2))
-        #worker.setDaemon(True)
-        worker = Process(target=getUpdatedJob, args=(self.parasolResultsFile, self.outputQueue1, self.outputQueue2))
-        worker.daemon = True
-        worker.start()
+        self.batches = []
+
         self.usedCpus = 0
         self.jobIDsToCpu = {}
          
@@ -132,23 +147,31 @@ class ParasolBatchSystem(AbstractBatchSystem):
         """Issues parasol with job commands.
         """
         self.checkResourceRequest(memory, cores, disk)
+        #look for a batch for jobs with these resource requirements
+        batch = None
+        for i in range(len(self.batches)):
+            if self.batches[i].cores == cores and self.batches[i].memory == memory:
+                batch = self.batches[i]
+        if batch is None:
+            batch = ParasolBatch(batchSystem = self, cores = cores, memory = memory)
+            self.batches.append(batch)
         pattern = re.compile("your job ([0-9]+).*")
-        parasolCommand = "%s -verbose -ram=%i -cpu=%i -results=%s add job '%s'" % (self.parasolCommand, memory, cores, self.parasolResultsFile, command)
+        parasolCommand = "%s -verbose -ram=%i -cpu=%i -results=%s add job '%s'" % (self.parasolCommand, memory, cores, batch.resultsFile, command)
 
         #Deal with the cpus
         self.usedCpus += cores
         while True: #Process finished results with no wait
             try:
-               jobID = self.outputQueue1.get_nowait()
+               jobID = batch.outputQueue1.get_nowait()
                self.usedCpus -= self.jobIDsToCpu.pop(jobID)
                assert self.usedCpus >= 0
-               self.outputQueue1.task_done()
+               batch.outputQueue1.task_done()
             except Empty:
                 break
         while self.usedCpus > self.maxCores: #If we are still waiting
-            self.usedCpus -= self.jobIDsToCpu.pop(self.outputQueue1.get())
+            self.usedCpus -= self.jobIDsToCpu.pop(batch.outputQueue1.get())
             assert self.usedCpus >= 0
-            self.outputQueue1.task_done()
+            batch.outputQueue1.task_done()
         #Now keep going
         while True:
             #time.sleep(0.1) #Sleep to let parasol catch up #Apparently unnecessary
@@ -184,11 +207,14 @@ class ParasolBatchSystem(AbstractBatchSystem):
         """
         #Example issued job, first field is jobID, last is the results file
         #31816891 localhost  benedictpaten 2009/07/23 10:54:09 python ~/Desktop/out.txt
+
+        #get the results file for each batch that has been created
+        resultsFiles = [batch.resultsFile for batch in self.batches]
         issuedJobs = set()
         for line in popenParasolCommand("%s -extended list jobs" % self.parasolCommand)[1]:
             if line != '':
                 tokens = line.split()
-                if tokens[-1] == self.parasolResultsFile:
+                if tokens[-1] in resultsFiles:
                     jobID = int(tokens[0])
                     issuedJobs.add(jobID)
         return list(issuedJobs)
@@ -201,7 +227,7 @@ class ParasolBatchSystem(AbstractBatchSystem):
         #r 5410324 benedictpaten worker 1247030076 localhost
         runningJobs = {}
         issuedJobs = self.getIssuedBatchJobIDs()
-        for line in popenParasolCommand("%s -results=%s pstat2 " % (self.parasolCommand, self.parasolResultsFile))[1]:
+        for line in popenParasolCommand("%s pstat2 " % self.parasolCommand)[1]:
             if line != '':
                 match = self.runningPattern.match(line)
                 if match != None:
@@ -212,10 +238,11 @@ class ParasolBatchSystem(AbstractBatchSystem):
         return runningJobs
     
     def getUpdatedBatchJob(self, maxWait):
-        jobID = self.getFromQueueSafely(self.outputQueue2, maxWait)
-        if jobID != None:
-            self.outputQueue2.task_done()
-        return jobID
+        for batch in self.batches:
+            jobID = batch.getUpdatedBatchJob(maxWait)
+            if jobID:
+                return jobID
+        return None
     
     @classmethod
     def getRescueBatchJobFrequency(cls):
@@ -225,7 +252,7 @@ class ParasolBatchSystem(AbstractBatchSystem):
         return 5400 #Once every 90 minutes
     def shutdown(self):
         pass
-        
+
 def main():
     pass
 

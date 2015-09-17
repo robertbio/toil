@@ -200,7 +200,7 @@ class ParasolBatchSystemTest(hidden.AbstractBatchSystemTest, ParasolTestSupport)
 
     def createBatchSystem(self):
         self._startParasol(numCores)
-        return ParasolBatchSystem(config=self.config, maxCores=numCores, maxMemory=1e9,
+        return ParasolBatchSystem(config=self.config, maxCores=numCores, maxMemory=3e9,
                                   maxDisk=1001)
 
     def tearDown(self):
@@ -218,8 +218,37 @@ class ParasolBatchSystemTest(hidden.AbstractBatchSystemTest, ParasolTestSupport)
         self.batchSystem.issueBatchJob(jobCommand, memory=100e6, cores=1, disk=1000)
         self.wait_for_jobs(wait_for_completion=True)
         self.assertTrue(os.path.exists(test_path))
+    def testBatchResourceLimits(self):
+        #self.batchSystem.issueBatchJob("sleep 100", memory=1e9, cores=1, disk=1000)
+        job1 = self.batchSystem.issueBatchJob("sleep 100", memory=1e9, cores=1, disk=1000)
+        job2 = self.batchSystem.issueBatchJob("sleep 100", memory=2e9, cores=1, disk=1000)
 
+        batches = self._getBatchList()
+        self.assertEqual(len(batches), 2)
 
+        #It would be better to directly check that the batches
+        #have the correct memory and cpu values, but parasol seems
+        #to slightly change the values sometimes.
+        self.assertTrue(batches[0]["ram"] != batches[1]["ram"])
+
+    def _parseBatchString(self, batchString):
+        import re
+        batchInfo = dict()
+        memPattern = re.compile("(\d+\.\d+)([kgmbt])")
+        items = batchString.split()
+        batchInfo["cores"] = int(items[7])
+        name = str(items[11])
+        memMatch = memPattern.match(items[8])
+        ramValue = float(memMatch.group(1))
+        ramUnits = memMatch.group(2)
+        ramConversion = {'b':1e0, 'k':1e3, 'm':1e6, 'g':1e9, 't':1e12}
+        batchInfo["ram"] = ramValue * ramConversion[ramUnits]
+        return batchInfo
+
+    def _getBatchList(self):
+        from toil.batchSystems.parasol import popenParasolCommand
+        exitStatus, batchLines = popenParasolCommand("parasol list batches")
+        return [self._parseBatchString(line) for line in batchLines[1:] if not line == ""]
 
 @needs_gridengine
 class GridEngineTest(hidden.AbstractBatchSystemTest):
