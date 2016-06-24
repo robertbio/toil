@@ -582,7 +582,7 @@ def main(args=None, stdout=sys.stdout):
 
     with Toil(options) as toil:
         def importFile(x):
-            sharedFileName = x
+            sharedFileName = hashlib.md5(x).hexdigest()
             if x.startswith("file://"):
                 st = os.stat(x[7:])
                 sharedFileName = "%i_%s" % (x, st.st_mtime)
