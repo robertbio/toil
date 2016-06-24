@@ -38,6 +38,7 @@ import copy
 import shutil
 import functools
 import urlparse
+import hashlib
 
 cwllogger = logging.getLogger("cwltool")
 
