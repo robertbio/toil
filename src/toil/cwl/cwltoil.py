@@ -582,7 +582,7 @@ def main(args=None, stdout=sys.stdout):
 
     with Toil(options) as toil:
         def importFile(x):
-            return toil.importFile(x, sharedFileName=hashlib.md5(x).hexdigest())
+            return toil.importFile(x, sharedFileName=x)
 
         def importDefault(tool):
             adjustFiles(tool, lambda x: "file://%s" % x if not urlparse.urlparse(x).scheme else x)
