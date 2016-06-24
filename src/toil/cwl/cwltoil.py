@@ -582,7 +582,11 @@ def main(args=None, stdout=sys.stdout):
 
     with Toil(options) as toil:
         def importFile(x):
-            return toil.importFile(x, sharedFileName=x)
+            sharedFileName = x
+            if x.startswith("file://"):
+                st = os.stat(x[7:])
+                sharedFileName = "%i_%s" % (x, st.st_mtime)
+            return toil.importFile(x, sharedFileName=sharedFileName)
 
         def importDefault(tool):
             adjustFiles(tool, lambda x: "file://%s" % x if not urlparse.urlparse(x).scheme else x)
