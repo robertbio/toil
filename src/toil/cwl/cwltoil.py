@@ -580,16 +580,19 @@ def main(args=None, stdout=sys.stdout):
     outdir = options.outdir
 
     with Toil(options) as toil:
+        def importFile(x):
+            return toil.importFile(x, sharedFileName=hashlib.md5(x).hexdigest())
+
         def importDefault(tool):
             adjustFiles(tool, lambda x: "file://%s" % x if not urlparse.urlparse(x).scheme else x)
-            adjustFiles(tool, functools.partial(writeFile, toil.importFile, {}))
+            adjustFiles(tool, functools.partial(writeFile, importFile, {}))
             return tool
         t.visit(importDefault)
 
         builder = t._init_job(job, os.path.dirname(os.path.abspath(options.cwljob)))
         (wf1, wf2) = makeJob(t, {}, use_container=use_container, preserve_environment=options.preserve_environment)
         adjustFiles(builder.job, lambda x: "file://%s" % x if not urlparse.urlparse(x).scheme else x)
-        adjustFiles(builder.job, functools.partial(writeFile, toil.importFile, {}))
+        adjustFiles(builder.job, functools.partial(writeFile, importFile, {}))
         wf1.cwljob = builder.job
 
         outobj = toil.start(wf1)
