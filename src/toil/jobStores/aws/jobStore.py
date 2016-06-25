@@ -1188,6 +1188,11 @@ class AWSJobStore(AbstractJobStore):
 
     def deleteStoredJobs(self):
         self.registry_domain.put_attributes(self.namePrefix, dict(exists=str(False)))
+        domain = self.jobsDomain:
+        if domain is not None:
+            for attempt in retry_sdb():
+                with attempt:
+                    domain.delete()
 
 
 aRepr = reprlib.Repr()
