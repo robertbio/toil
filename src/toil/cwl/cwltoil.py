@@ -581,32 +581,36 @@ def main(args=None, stdout=sys.stdout):
     outdir = options.outdir
 
     with Toil(options) as toil:
-        if os.path.exists("uploads.json"):
-            with open("uploads.json") as f:
-                index = json.load(f)
+        if not toil.options.restart:
+            if os.path.exists("uploads.json"):
+                with open("uploads.json") as f:
+                    index = json.load(f)
+            else:
+                index = {}
+
+            def importFile(x):
+                t = writeFile(toil.importFile, index, x)
+                with open(".uploads.json", "w") as f:
+                    json.dump(index, f)
+                os.rename(".uploads.json", "uploads.json")
+                return t
+
+            def importDefault(tool):
+                adjustFiles(tool, lambda x: "file://%s" % x if not urlparse.urlparse(x).scheme else x)
+                adjustFiles(tool, importFile)
+                return tool
+            t.visit(importDefault)
+
+            builder = t._init_job(job, os.path.dirname(os.path.abspath(options.cwljob)))
+            (wf1, wf2) = makeJob(t, {}, use_container=use_container, preserve_environment=options.preserve_environment)
+            adjustFiles(builder.job, lambda x: "file://%s" % x if not urlparse.urlparse(x).scheme else x)
+            adjustFiles(builder.job, importFile)
+            wf1.cwljob = builder.job
+
+            outobj = toil.start(wf1)
         else:
-            index = {}
+            outobj = toil.restart()
 
-        def importFile(x):
-            t = writeFile(toil.importFile, index, x)
-            with open(".uploads.json", "w") as f:
-                json.dump(index, f)
-            os.rename(".uploads.json", "uploads.json")
-            return t
-
-        def importDefault(tool):
-            adjustFiles(tool, lambda x: "file://%s" % x if not urlparse.urlparse(x).scheme else x)
-            adjustFiles(tool, importFile)
-            return tool
-        t.visit(importDefault)
-
-        builder = t._init_job(job, os.path.dirname(os.path.abspath(options.cwljob)))
-        (wf1, wf2) = makeJob(t, {}, use_container=use_container, preserve_environment=options.preserve_environment)
-        adjustFiles(builder.job, lambda x: "file://%s" % x if not urlparse.urlparse(x).scheme else x)
-        adjustFiles(builder.job, importFile)
-        wf1.cwljob = builder.job
-
-        outobj = toil.start(wf1)
         outobj = resolve_indirect(outobj)
 
         adjustFilesWithSecondary(outobj, functools.partial(getFile, toil, outdir, index={}, export=True, rename_collision=True))
