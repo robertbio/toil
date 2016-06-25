@@ -56,7 +56,8 @@ def main():
         sys.exit(0)
 
     logger.info("Attempting to delete the job store")
-    jobStore.deleteJobStore()
+    #jobStore.deleteJobStore()
+    jobStore.deleteStoredJobs()
     logger.info("Successfully deleted the job store")
 
 
