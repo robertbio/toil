@@ -590,7 +590,7 @@ def main(args=None, stdout=sys.stdout):
         def importFile(x):
             t = toil.importFile(x)
             with open("uploads.json", "w") as f:
-                index = json.dump(f)
+                json.dump(index, f)
             return t
 
         def importDefault(tool):
