@@ -581,23 +581,28 @@ def main(args=None, stdout=sys.stdout):
     outdir = options.outdir
 
     with Toil(options) as toil:
+        if os.path.exists("uploads.json"):
+            with open("uploads.json") as f:
+                index = json.load(f)
+        else:
+            index = {}
+
         def importFile(x):
-            sharedFileName = hashlib.md5(x).hexdigest()
-            if x.startswith("file://"):
-                st = os.stat(x[7:])
-                sharedFileName = "%i_%s" % (sharedFileName, st.st_mtime)
-            return toil.importFile(x, sharedFileName=sharedFileName)
+            t = toil.importFile(x)
+            with open("uploads.json", "w") as f:
+                index = json.dump(f)
+            return t
 
         def importDefault(tool):
             adjustFiles(tool, lambda x: "file://%s" % x if not urlparse.urlparse(x).scheme else x)
-            adjustFiles(tool, functools.partial(writeFile, importFile, {}))
+            adjustFiles(tool, functools.partial(writeFile, importFile, index))
             return tool
         t.visit(importDefault)
 
         builder = t._init_job(job, os.path.dirname(os.path.abspath(options.cwljob)))
         (wf1, wf2) = makeJob(t, {}, use_container=use_container, preserve_environment=options.preserve_environment)
         adjustFiles(builder.job, lambda x: "file://%s" % x if not urlparse.urlparse(x).scheme else x)
-        adjustFiles(builder.job, functools.partial(writeFile, importFile, {}))
+        adjustFiles(builder.job, functools.partial(writeFile, importFile, index))
         wf1.cwljob = builder.job
 
         outobj = toil.start(wf1)
