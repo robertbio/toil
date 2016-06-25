@@ -589,8 +589,9 @@ def main(args=None, stdout=sys.stdout):
 
         def importFile(x):
             t = writeFile(toil.importFile, index, x)
-            with open("uploads.json", "w") as f:
+            with open(".uploads.json", "w") as f:
                 json.dump(index, f)
+            os.rename(".uploads.json", "uploads.json")
             return t
 
         def importDefault(tool):
